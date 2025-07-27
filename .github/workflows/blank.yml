@@ -3,8 +3,11 @@ name: Android Release Build
 on:
   push:
     tags:
-      - 'v*'  # Triggers only when you push a tag like v1.0.0
-  workflow_dispatch:
+      - 'v*'  # Only run this workflow when a version tag is pushed (e.g., v1.0.0)
+  workflow_dispatch:  # Also allows manual trigger from the GitHub Actions tab
+
+permissions:
+  contents: write  # Needed to create releases and upload files
 
 jobs:
   build:
