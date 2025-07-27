@@ -1,0 +1,22 @@
+{
+  "id": "extras",
+  "disable": [
+    "cmd jobscheduler cancel-all",
+    "cmd alarm cancel-all",
+
+    "pm disable-user --user 0 com.android.deskclock",
+    "pm disable-user --user 0 com.google.android.deskclock",
+
+    "sync",
+    "echo 3 > /proc/sys/vm/drop_caches",
+    "fstrim /data"
+  ],
+  "restore": [
+    "cmd jobscheduler reset-all",
+    "cmd alarm reset-all",
+
+
+    "pm enable --user 0 com.android.deskclock",
+    "pm enable --user 0 com.google.android.deskclock"
+  ]
+}

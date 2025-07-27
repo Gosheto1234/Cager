@@ -1,0 +1,19 @@
+{
+  "id": "apps",
+  "disable": [
+    "pm disable-user --user 0 com.android.vending",
+    "pm disable-user --user 0 com.google.android.gms",
+    "pm disable-user --user 0 com.google.android.apps.photos",
+    "pm disable-user --user 0 com.google.android.apps.docs",
+    "pm disable-user --user 0 com.google.android.apps.tasks",
+    "pm disable-user --user 0 com.google.android.tts"
+  ],
+  "restore": [
+    "pm enable --user 0 com.android.vending",
+    "pm enable --user 0 com.google.android.gms",
+    "pm enable --user 0 com.google.android.apps.photos",
+    "pm enable --user 0 com.google.android.apps.docs",
+    "pm enable --user 0 com.google.android.apps.tasks",
+    "pm enable --user 0 com.google.android.tts"
+  ]
+}
