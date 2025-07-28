@@ -44,5 +44,7 @@ jobs:
           name: Latest Build
           body: Automated build from branch main
           files: app/build/outputs/apk/debug/Cager.apk
+          prerelease: true
+          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
