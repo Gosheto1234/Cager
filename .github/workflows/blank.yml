@@ -23,8 +23,10 @@ jobs:
           distribution: 'temurin'
           java-version: 17
 
-      - name: Setup Gradle
+      - name: Setup Gradle (cache disabled to avoid post-job cleanup errors)
         uses: gradle/gradle-build-action@v2
+        with:
+          cache-disabled: true
 
       - name: Grant execute permission to Gradle wrapper
         run: chmod +x ./gradlew
