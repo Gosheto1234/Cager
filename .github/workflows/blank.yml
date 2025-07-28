@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # Required to create/update releases
+  contents: write  # Required to create new releases
 
 jobs:
   build:
@@ -50,7 +50,7 @@ jobs:
             Automated build from main branch.
             Timestamp: ${{ steps.get_tag.outputs.TAG_NAME }}
           files: app/build/outputs/apk/debug/Cager.apk
-          prerelease: true
-          draft: false
+          prerelease: false     # ✅ Full release
+          draft: false          # ✅ Not a draft
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
