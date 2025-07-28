@@ -6,7 +6,9 @@
     "pm disable-user --user 0 com.google.android.apps.photos",
     "pm disable-user --user 0 com.google.android.apps.docs",
     "pm disable-user --user 0 com.google.android.apps.tasks",
-    "pm disable-user --user 0 com.google.android.tts"
+    "pm disable-user --user 0 com.google.android.tts",
+    "pm disable-user --user 0 com.samsung.android.app.quickshare"
+
   ],
   "restore": [
     "pm enable --user 0 com.android.vending",
@@ -14,6 +16,7 @@
     "pm enable --user 0 com.google.android.apps.photos",
     "pm enable --user 0 com.google.android.apps.docs",
     "pm enable --user 0 com.google.android.apps.tasks",
-    "pm enable --user 0 com.google.android.tts"
+    "pm enable --user 0 com.google.android.tts",
+    "pm enable com.samsung.android.app.quickshare"
   ]
 }

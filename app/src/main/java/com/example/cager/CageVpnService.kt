@@ -11,11 +11,13 @@ import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import java.io.FileInputStream
 import java.nio.ByteBuffer
+import android.util.Log
 
 class CageVpnService : VpnService(), CoroutineScope {
     companion object {
         private const val ONGOING_NOTIFICATION_ID = 1
         private const val VPN_CHANNEL_ID = "cage_service"
+        const val ACTION_STOP = "com.example.cager.ACTION_STOP_VPN"
     }
 
     private val job = SupervisorJob()
@@ -24,40 +26,57 @@ class CageVpnService : VpnService(), CoroutineScope {
     private var vpnInterface: ParcelFileDescriptor? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d("CageVpnService","onStartCommand")
         startForeground(ONGOING_NOTIFICATION_ID, buildNotification())
         establishVpn()
         return START_STICKY
     }
 
+
     private fun establishVpn() {
+        // Build a VPN that captures all traffic
         val builder = Builder().apply {
             setMtu(1500)
-            addAddress("10.0.0.2", 32)   // Virtual IP
-            addRoute("0.0.0.0", 0)       // Capture all traffic
-            // You can call .addDnsServer() or .allowFamily() here as needed
+            addAddress("10.0.0.2", 32)
+            addRoute("0.0.0.0", 0)
         }
 
+        // This is your “tunnel” file descriptor
         vpnInterface = builder.establish()
         vpnInterface?.let { fd ->
             launch {
                 val inputChannel = FileInputStream(fd.fileDescriptor).channel
-                // val outputChannel = FileOutputStream(fd.fileDescriptor).channel
                 val packet = ByteBuffer.allocate(32767)
 
                 while (isActive) {
                     packet.clear()
+                    // read() will block until something arrives
                     val length = inputChannel.read(packet)
                     if (length > 0) {
-                        // Drop every packet: outbound is blocked
+                        // we simply drop every outbound packet
                     }
                 }
             }
         }
     }
 
+    /**
+     * If the user disables the VPN in system settings, this will be called.
+     * We tear down immediately.
+     */
+    override fun onRevoke() {
+        Log.d("CageVpnService","onRevoke")
+        vpnInterface?.close()
+        stopForeground(true)
+        stopSelf()
+    }
+
+
     override fun onDestroy() {
+        Log.d("CageVpnService","onDestroy")
         job.cancel()
         vpnInterface?.close()
+        stopForeground(true)
         super.onDestroy()
     }
 
@@ -66,11 +85,11 @@ class CageVpnService : VpnService(), CoroutineScope {
         return NotificationCompat.Builder(this, VPN_CHANNEL_ID)
             .setContentTitle("Cage is active")
             .setSmallIcon(R.drawable.ic_lock)
-            // ↓ Make it ongoing & non‑auto‑cancelable
-            .setOngoing(true)
-            .setAutoCancel(false)
+            .setOngoing(true)     // sticky
+            .setAutoCancel(false) // never auto‑cancel
             .build()
             .apply {
+                // enforce the flags on the Notification object
                 flags = flags or
                         Notification.FLAG_ONGOING_EVENT or
                         Notification.FLAG_NO_CLEAR
