@@ -1,0 +1,9 @@
+{
+  "id": "sync",
+  "disable": [
+    "settings put global master_sync_enabled 0"
+  ],
+  "restore": [
+    "settings put global master_sync_enabled 1"
+  ]
+}

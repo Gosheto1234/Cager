@@ -1,0 +1,13 @@
+{
+  "id": "sensors",
+  "disable": [
+    "pm disable-user --user 0 com.android.camera",
+    "appops set --uid all RECORD_AUDIO ignore",
+    "settings put secure location_providers_allowed ''"
+  ],
+  "restore": [
+    "pm enable --user 0 com.android.camera",
+    "appops set --uid all RECORD_AUDIO allow",
+    "settings put secure location_providers_allowed gps,network"
+  ]
+}

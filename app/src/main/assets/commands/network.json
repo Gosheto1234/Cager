@@ -1,0 +1,15 @@
+{
+  "id": "net",
+  "disable": [
+    "iptables -F",
+    "iptables -P INPUT DROP",
+    "iptables -P OUTPUT DROP",
+    "iptables -P FORWARD DROP"
+  ],
+  "restore": [
+    "iptables -F",
+    "iptables -P INPUT ACCEPT",
+    "iptables -P OUTPUT ACCEPT",
+    "iptables -P FORWARD ACCEPT"
+  ]
+}

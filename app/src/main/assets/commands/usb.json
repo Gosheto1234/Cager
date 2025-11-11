@@ -1,0 +1,9 @@
+{
+  "id": "usb",
+  "disable": [
+    "svc usb setFunctions none"
+  ],
+  "restore": [
+    "svc usb setFunctions mtp"
+  ]
+}

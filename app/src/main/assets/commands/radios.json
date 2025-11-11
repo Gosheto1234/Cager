@@ -1,0 +1,15 @@
+{
+  "id": "radios",
+  "disable": [
+    "svc wifi disable",
+    "svc data disable",
+    "svc bluetooth disable",
+    "svc nfc disable"
+  ],
+  "restore": [
+    "svc wifi enable",
+    "svc data enable",
+    "svc bluetooth enable",
+    "svc nfc enable"
+  ]
+}
