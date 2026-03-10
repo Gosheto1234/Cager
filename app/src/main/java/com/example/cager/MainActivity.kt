@@ -1,25 +1,22 @@
 package com.example.cager
 
-// Android + Kotlin stdlib
 import android.Manifest
 import android.animation.ValueAnimator
 import android.app.AlertDialog
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.Service
-import androidx.work.Data
-import android.app.Notification
+import android.bluetooth.BluetoothAdapter
 import android.content.ComponentName
 import android.content.Context
-import androidx.core.app.NotificationManagerCompat
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.VpnService
-import android.os.*
+import android.net.wifi.WifiManager
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
 import android.provider.Settings as ProvSettings
 import android.util.Log
 import android.view.Menu
-import androidx.work.PeriodicWorkRequest.Builder
 import android.view.MenuItem
 import android.view.View
 import android.view.animation.AlphaAnimation
@@ -30,26 +27,22 @@ import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.appcompat.widget.Toolbar
 import androidx.core.app.ActivityCompat
-import android.net.wifi.WifiManager
-import android.bluetooth.BluetoothAdapter
-import android.provider.Settings
-import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.*
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequest
+import androidx.work.WorkManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
-
-// **WorkManager imports – NO wildcards, NO KTX builder**
-import androidx.work.PeriodicWorkRequest
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.WorkManager
-
 
 class MainActivity : AppCompatActivity() {
     private var isCaged = false
@@ -60,28 +53,42 @@ class MainActivity : AppCompatActivity() {
         const val PREFS = "cager_prefs"
         const val ROOT_CHANNEL_ID = "cager_root_channel"
         const val ROOT_NOTIFICATION_ID = 42
+
         const val ASCII_ANIM_KEY = "disableAsciiAnim"
-        private val KEYS = listOf(
-            "net", "radios", "airplane", "usb", "sync", "apps", "sensors", "extras"
-        )
         const val WHITELIST_KEY = "whitelist"
         const val NOTIF_STYLE_KEY = "notifStyle"
         const val BATTERY_GUARD_KEY = "batteryGuard"
+        const val IS_CAGED_KEY = "isCaged"
+
+        const val POWER_KEY = "power"
+        const val POWER_HIDDEN_SCAN_KEY = "powerHiddenScan"
+        const val POWER_BATTERY_SAVER_KEY = "powerBatterySaver"
+        const val POWER_AOD_KEY = "powerAodOff"
+        const val POWER_BRIGHTNESS_KEY = "powerBrightness"
+        const val POWER_DOZE_KEY = "powerDoze"
+        const val POWER_5G_KEY = "powerDisable5g"
 
         private const val REQUEST_BT_WIFI = 1002
 
-        @Volatile var toggleNfc = false
-        @Volatile var toggleAirplane = false
-        @Volatile var toggleBattery = false
+        private val KEYS = listOf(
+            "net",
+            "radios",
+            "airplane",
+            "usb",
+            "sync",
+            POWER_KEY,
+            "apps",
+            "sensors",
+            "extras"
+        )
     }
 
-    private val vpnPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            // User granted the VPN permission → start the service
-            onCaged(true, findViewById(R.id.btnToggle))
-        }
+    private val wifiManager: WifiManager by lazy {
+        applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    }
+
+    private val bluetoothAdapter: BluetoothAdapter? by lazy {
+        BluetoothAdapter.getDefaultAdapter()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,40 +96,34 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         setSupportActionBar(findViewById<Toolbar>(R.id.toolbar))
 
-        // ensure battery‑guard default
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        if (!prefs.contains(BATTERY_GUARD_KEY)) {
-            prefs.edit().putBoolean(BATTERY_GUARD_KEY, true).apply()
-        }
+        ensureDefaultPrefs(prefs)
 
         createRootNotificationChannel()
         requestNotificationPermissionIfNeeded()
         ensureBluetoothPerms()
 
-        // ─── Schedule periodic housekeeping ────────────────────────
-        val housekeeperReq: PeriodicWorkRequest = Builder(
-            HousekeeperWorker::class.java,
-            12L,
-            TimeUnit.HOURS
-        ).build()
-        WorkManager.getInstance(this)
-            .enqueueUniquePeriodicWork(
-                "housekeeper",
-                ExistingPeriodicWorkPolicy.KEEP,
-                housekeeperReq
-            )
-
+        isCaged = prefs.getBoolean(IS_CAGED_KEY, false)
 
         val btn = findViewById<Button>(R.id.btnToggle)
         val loader = findViewById<View>(R.id.loaderOverlay)
         val ascii = findViewById<TextView>(R.id.asciiLoader)
+
+        btn.text = getString(if (isCaged) R.string.disable_cage else R.string.enable_cage)
         ascii.text = loadAsciiArt()
+
+        syncHousekeeperWithCage(isCaged)
+
+        if (isDeviceRooted() && isCaged && prefs.getBoolean(POWER_KEY, true)) {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, PowerCageService::class.java)
+            )
+        }
 
         btn.setOnClickListener {
             if (!isCaged) {
-                // ─── ENABLE CAGE ───────────────────────────────────────
                 if (isDeviceRooted()) {
-                    // ─ Rooted enable ────────────────────────
                     uiScope.launch {
                         showLoader(loader, ascii)
                         try {
@@ -142,13 +143,14 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 } else {
-                    // ─ Non‑root enable ───────────────────────
-                    val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
                     val canWifi = ContextCompat.checkSelfPermission(
-                        this, Manifest.permission.CHANGE_WIFI_STATE
+                        this,
+                        Manifest.permission.CHANGE_WIFI_STATE
                     ) == PackageManager.PERMISSION_GRANTED
+
                     val canBt = ContextCompat.checkSelfPermission(
-                        this, Manifest.permission.BLUETOOTH_CONNECT
+                        this,
+                        Manifest.permission.BLUETOOTH_CONNECT
                     ) == PackageManager.PERMISSION_GRANTED
 
                     if (canWifi) wifiManager.isWifiEnabled = false
@@ -177,9 +179,7 @@ class MainActivity : AppCompatActivity() {
                     onCaged(true, btn)
                 }
             } else {
-                // ─── DISABLE CAGE ───────────────────────────────────────
                 if (isDeviceRooted()) {
-                    // ─ Rooted disable ────────────────────────
                     uiScope.launch {
                         showLoader(loader, ascii)
                         try {
@@ -199,13 +199,14 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 } else {
-                    // ─ Non‑root disable ───────────────────────
-                    val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
                     val canWifi = ContextCompat.checkSelfPermission(
-                        this, Manifest.permission.CHANGE_WIFI_STATE
+                        this,
+                        Manifest.permission.CHANGE_WIFI_STATE
                     ) == PackageManager.PERMISSION_GRANTED
+
                     val canBt = ContextCompat.checkSelfPermission(
-                        this, Manifest.permission.BLUETOOTH_CONNECT
+                        this,
+                        Manifest.permission.BLUETOOTH_CONNECT
                     ) == PackageManager.PERMISSION_GRANTED
 
                     if (canWifi) wifiManager.isWifiEnabled = true
@@ -237,7 +238,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-        // ─── Loader helpers ─────────────────────────────────────────
+    override fun onDestroy() {
+        asciiAnimator?.cancel()
+        uiScope.cancel()
+        super.onDestroy()
+    }
+
+    private fun ensureDefaultPrefs(prefs: android.content.SharedPreferences) {
+        val edit = prefs.edit()
+
+        if (!prefs.contains(BATTERY_GUARD_KEY)) edit.putBoolean(BATTERY_GUARD_KEY, true)
+        if (!prefs.contains(POWER_KEY)) edit.putBoolean(POWER_KEY, true)
+        if (!prefs.contains(POWER_HIDDEN_SCAN_KEY)) edit.putBoolean(POWER_HIDDEN_SCAN_KEY, true)
+        if (!prefs.contains(POWER_BATTERY_SAVER_KEY)) edit.putBoolean(POWER_BATTERY_SAVER_KEY, true)
+        if (!prefs.contains(POWER_AOD_KEY)) edit.putBoolean(POWER_AOD_KEY, true)
+        if (!prefs.contains(POWER_BRIGHTNESS_KEY)) edit.putBoolean(POWER_BRIGHTNESS_KEY, true)
+        if (!prefs.contains(POWER_DOZE_KEY)) edit.putBoolean(POWER_DOZE_KEY, true)
+        if (!prefs.contains(POWER_5G_KEY)) edit.putBoolean(POWER_5G_KEY, false)
+
+        edit.apply()
+    }
+
     private suspend fun showLoader(loader: View, ascii: TextView) = withContext(Dispatchers.Main) {
         loader.visibility = View.VISIBLE
         loader.startAnimation(AlphaAnimation(0f, 1f).apply { duration = 200 })
@@ -251,33 +272,53 @@ class MainActivity : AppCompatActivity() {
 
     private fun ensureBluetoothPerms() {
         val needed = mutableListOf<String>()
+
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CHANGE_WIFI_STATE)
-            != PackageManager.PERMISSION_GRANTED) {
+            != PackageManager.PERMISSION_GRANTED
+        ) {
             needed += Manifest.permission.CHANGE_WIFI_STATE
         }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
-                != PackageManager.PERMISSION_GRANTED) {
+                != PackageManager.PERMISSION_GRANTED
+            ) {
                 needed += Manifest.permission.BLUETOOTH_CONNECT
             }
         }
+
         if (needed.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), REQUEST_BT_WIFI)
         }
     }
 
-
-
-    // ─── Update UI & DND ────────────────────────────────────────
-    // Replace the existing onCaged(...) with this safe version
     private fun onCaged(caged: Boolean, btn: Button) {
         isCaged = caged
         btn.text = getString(if (caged) R.string.disable_cage else R.string.enable_cage)
 
-        // DND logic is protected so it never throws.
+        getSharedPreferences(PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean(IS_CAGED_KEY, caged)
+            .apply()
+
+        syncHousekeeperWithCage(caged)
+
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        if (isDeviceRooted() && prefs.getBoolean(POWER_KEY, true)) {
+            if (caged) {
+                ContextCompat.startForegroundService(
+                    this,
+                    Intent(this, PowerCageService::class.java)
+                )
+            } else {
+                stopService(Intent(this, PowerCageService::class.java))
+            }
+        } else {
+            stopService(Intent(this, PowerCageService::class.java))
+        }
+
         val style = try {
-            getSharedPreferences(PREFS, MODE_PRIVATE)
-                .getString(NOTIF_STYLE_KEY, "full")
+            prefs.getString(NOTIF_STYLE_KEY, "full")
         } catch (e: Exception) {
             Log.w("Cager", "Failed reading notif style", e)
             "full"
@@ -287,13 +328,31 @@ class MainActivity : AppCompatActivity() {
             if (caged && style == "silent") enableDndNone()
             else restoreDnd()
         } catch (e: Exception) {
-            // Defensive: ensure nothing bubbles up to crash callers (button clicks, coroutines, etc).
             Log.w("Cager", "DND update failed (ignored)", e)
         }
     }
 
+    private fun syncHousekeeperWithCage(caged: Boolean) {
+        val wm = WorkManager.getInstance(this)
 
-    // Safer enableDndNone: check permission and defend the setInterruptionFilter call
+        if (caged) {
+            wm.cancelUniqueWork("housekeeper")
+            return
+        }
+
+        val req = PeriodicWorkRequest.Builder(
+            HousekeeperWorker::class.java,
+            12L,
+            TimeUnit.HOURS
+        ).build()
+
+        wm.enqueueUniquePeriodicWork(
+            "housekeeper",
+            ExistingPeriodicWorkPolicy.KEEP,
+            req
+        )
+    }
+
     private fun enableDndNone() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val nm = getSystemService(NotificationManager::class.java) ?: run {
@@ -302,7 +361,6 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (!nm.isNotificationPolicyAccessGranted) {
-                // Sends user to the exact settings screen to grant DND access
                 startActivity(
                     Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -320,8 +378,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
-    // Safer restoreDnd: check permission before calling setInterruptionFilter
     private fun restoreDnd() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val nm = getSystemService(NotificationManager::class.java) ?: run {
@@ -344,8 +400,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
-    // ─── Menu & Advanced dialog ─────────────────────────────────
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
         return true
@@ -353,39 +407,117 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return if (item.itemId == R.id.action_advanced) {
-            showSettings(); true
-        } else super.onOptionsItemSelected(item)
+            showSettings()
+            true
+        } else {
+            super.onOptionsItemSelected(item)
+        }
     }
 
-    private val wifiManager: WifiManager by lazy {
-        applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-    }
-    private val bluetoothAdapter: BluetoothAdapter? by lazy {
-        BluetoothAdapter.getDefaultAdapter()
-    }
     private fun showSettings() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val container = layoutInflater.inflate(R.layout.dialog_settings, null)
         val settingsLayout = container.findViewById<LinearLayout>(R.id.settings_container)
 
-        // Subsystem toggles:
-        // Only show the toggles that will actually work:
-        val availableKeys = if (isDeviceRooted()) {
-            KEYS
+        if (isDeviceRooted()) {
+            settingsLayout.addView(
+                TextView(this).apply {
+                    text = "Subsystems"
+                    setPadding(0, 16, 0, 8)
+                }
+            )
+
+            KEYS.forEach { key ->
+                val sw = SwitchCompat(this).apply {
+                    text = prettyKey(key)
+                    isChecked = prefs.getBoolean(key, true)
+                }
+                settingsLayout.addView(sw)
+                sw.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
+                    prefs.edit().putBoolean(key, on).apply()
+
+                    if (key == POWER_KEY && isCaged) {
+                        if (on) {
+                            PowerCageManager.apply(this@MainActivity)
+                            ContextCompat.startForegroundService(
+                                this@MainActivity,
+                                Intent(this@MainActivity, PowerCageService::class.java)
+                            )
+                        } else {
+                            stopService(Intent(this@MainActivity, PowerCageService::class.java))
+                            PowerCageManager.restore(this@MainActivity)
+                        }
+                    }
+                }
+            }
+
+            settingsLayout.addView(
+                TextView(this).apply {
+                    text = "Power profile while caged"
+                    setPadding(0, 24, 0, 8)
+                }
+            )
+
+            addPowerSwitch(
+                settingsLayout,
+                prefs,
+                POWER_HIDDEN_SCAN_KEY,
+                "Disable hidden Wi-Fi/Bluetooth scanning",
+                true
+            )
+
+            addPowerSwitch(
+                settingsLayout,
+                prefs,
+                POWER_BATTERY_SAVER_KEY,
+                "Enable Battery Saver",
+                true
+            )
+
+            addPowerSwitch(
+                settingsLayout,
+                prefs,
+                POWER_AOD_KEY,
+                "Turn off Always On Display",
+                true
+            )
+
+            addPowerSwitch(
+                settingsLayout,
+                prefs,
+                POWER_BRIGHTNESS_KEY,
+                "Reduce brightness by 10%",
+                true
+            )
+
+            addPowerSwitch(
+                settingsLayout,
+                prefs,
+                POWER_DOZE_KEY,
+                "Stricter Doze when screen is off",
+                true
+            )
+
+            addPowerSwitch(
+                settingsLayout,
+                prefs,
+                POWER_5G_KEY,
+                "Try LTE-only / no 5G (experimental)",
+                false
+            )
         } else {
-            listOf("radios", "airplane")
-        }
-        availableKeys.forEach { key ->
-            val sw = SwitchCompat(this).apply {
-                text = key.capitalize()
-                isChecked = prefs.getBoolean(key, true)
+            listOf("radios", "airplane").forEach { key ->
+                val sw = SwitchCompat(this).apply {
+                    text = prettyKey(key)
+                    isChecked = prefs.getBoolean(key, true)
+                }
+                settingsLayout.addView(sw)
+                sw.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
+                    prefs.edit().putBoolean(key, on).apply()
+                }
             }
-            settingsLayout.addView(sw)
-            sw.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
-                prefs.edit().putBoolean(key, on).apply()
-            }
         }
-        // ASCII‑animation toggle:
+
         val swAscii = SwitchCompat(this).apply {
             text = getString(R.string.disable_animation)
             isChecked = prefs.getBoolean(ASCII_ANIM_KEY, false)
@@ -395,40 +527,39 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putBoolean(ASCII_ANIM_KEY, off).apply()
         }
 
-        // Re‑open notif access button:
-        val btnNotif = Button(this).apply { text = getString(R.string.open_settings) }
+        val btnNotif = Button(this).apply {
+            text = getString(R.string.open_settings)
+        }
         settingsLayout.addView(btnNotif)
         btnNotif.setOnClickListener { requestNotificationListenerPermission() }
 
-        // Whitelist picker:
-        container.findViewById<Button>(R.id.btnWhitelist)
-            .setOnClickListener {
-                startActivity(Intent(this, WhitelistActivity::class.java))
-            }
+        container.findViewById<Button>(R.id.btnWhitelist).setOnClickListener {
+            startActivity(Intent(this, WhitelistActivity::class.java))
+        }
 
-        // Notification style radios:
         val styleGroup = container.findViewById<RadioGroup>(R.id.radioNotif)
         listOf("full", "icon", "silent").forEachIndexed { i, tag ->
-            styleGroup.addView(RadioButton(this).apply {
-                text = tag
-                id = i
-                isChecked = prefs.getString(NOTIF_STYLE_KEY, "full") == tag
-            })
+            styleGroup.addView(
+                RadioButton(this).apply {
+                    text = tag
+                    id = i
+                    isChecked = prefs.getString(NOTIF_STYLE_KEY, "full") == tag
+                }
+            )
         }
         styleGroup.setOnCheckedChangeListener { _, id ->
-            prefs.edit()
-                .putString(NOTIF_STYLE_KEY, listOf("full", "icon", "silent")[id])
-                .apply()
+            prefs.edit().putString(
+                NOTIF_STYLE_KEY,
+                listOf("full", "icon", "silent")[id]
+            ).apply()
         }
 
-        // Battery‑guard:
         val bg = container.findViewById<SwitchCompat>(R.id.swBattery)
         bg.isChecked = prefs.getBoolean(BATTERY_GUARD_KEY, true)
         bg.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
             prefs.edit().putBoolean(BATTERY_GUARD_KEY, on).apply()
         }
 
-        // ─── “Rooted: yes/no” footer ──────────────────────────
         val tvRooted = TextView(this).apply {
             text = if (isDeviceRooted()) "Rooted: yes" else "Rooted: no"
             setPadding(0, 16, 0, 0)
@@ -442,12 +573,47 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ─── Notification listener helpers ─────────────────────────
+    private fun addPowerSwitch(
+        parent: LinearLayout,
+        prefs: android.content.SharedPreferences,
+        key: String,
+        label: String,
+        defaultValue: Boolean
+    ) {
+        val sw = SwitchCompat(this).apply {
+            text = label
+            isChecked = prefs.getBoolean(key, defaultValue)
+        }
+
+        parent.addView(sw)
+        sw.setOnCheckedChangeListener { _, on ->
+            prefs.edit().putBoolean(key, on).apply()
+
+            if (!isCaged || !isDeviceRooted() || !prefs.getBoolean(POWER_KEY, true)) {
+                return@setOnCheckedChangeListener
+            }
+
+            if (key == POWER_DOZE_KEY) {
+                PowerCageManager.reevaluate(this)
+            }
+        }
+    }
+
+    private fun prettyKey(key: String): String {
+        return when (key) {
+            POWER_KEY -> "Power"
+            else -> key.replaceFirstChar { ch ->
+                if (ch.isLowerCase()) ch.titlecase() else ch.toString()
+            }
+        }
+    }
+
     private fun isNotificationListenerEnabled(): Boolean {
         val flat = Settings.Secure.getString(
             contentResolver,
             "enabled_notification_listeners"
         ) ?: return false
+
         val me = ComponentName(this, NotificationHandlerService::class.java)
         return flat.split(':').any { ComponentName.unflattenFromString(it) == me }
     }
@@ -456,13 +622,8 @@ class MainActivity : AppCompatActivity() {
         startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
     }
 
-    // ─── Original helpers ───────────────────────────────────────
     private fun loadAsciiArt(): String =
         resources.openRawResource(R.raw.ascii_art).bufferedReader().use { it.readText() }
-
-    /** Starts the Cage VPN service in the foreground. */
-
-
 
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

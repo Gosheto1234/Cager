@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 object CommandRunner {
+
     /**
      * Execute your disable/restore sequence based on `disable`.
      * Skips commands that don't apply to this device.
@@ -20,18 +21,21 @@ object CommandRunner {
                 Context.MODE_PRIVATE
             )
 
-            // Battery‑guard: if disable==true and battery < 15%, skip heavy modules entirely
+            // Battery-guard: if disable==true and battery < 15%, skip heavy modules entirely
             val guardEnabled = prefs.getBoolean(
                 MainActivity.BATTERY_GUARD_KEY,
                 true
             )
+
             if (disable && guardEnabled) {
                 val bm = context.getSystemService(
                     Context.BATTERY_SERVICE
                 ) as BatteryManager
+
                 val level = bm.getIntProperty(
                     BatteryManager.BATTERY_PROPERTY_CAPACITY
                 )
+
                 if (level < 15) {
                     Log.w(
                         "CommandRunner",
@@ -41,12 +45,17 @@ object CommandRunner {
                 }
             }
 
+            // Apply power profile first when enabling Cage
+            if (disable && prefs.getBoolean(MainActivity.POWER_KEY, true)) {
+                PowerCageManager.apply(context)
+            }
+
             // Packages whose notifications should be suppressed/restored
             val suppressPkgs = listOf(
-                "com.google.android.projection.gearhead",   // Android Auto
-                "com.samsung.android.customization",        // Customization Service
-                "com.samsung.android.visit",                // Samsung Visit
-                "com.samsung.android.app.quickshare"        // Quick Share Service
+                "com.google.android.projection.gearhead", // Android Auto
+                "com.samsung.android.customization",      // Customization Service
+                "com.samsung.android.visit",             // Samsung Visit
+                "com.samsung.android.app.quickshare"     // Quick Share Service
             )
 
             if (disable) {
@@ -64,6 +73,7 @@ object CommandRunner {
                         )
                     }
                 }
+
                 // Completely disable Quick Share to prevent its UI
                 try {
                     Runtime.getRuntime()
@@ -91,7 +101,7 @@ object CommandRunner {
             }
 
             modules.forEach { cmd ->
-                // pre‑filter certain patterns:
+                // pre-filter certain patterns
                 when {
                     cmd.startsWith("pm disable-user") || cmd.startsWith("pm enable") -> {
                         val pkg = cmd.substringAfterLast(' ')
@@ -105,6 +115,7 @@ object CommandRunner {
                             return@forEach
                         }
                     }
+
                     cmd.startsWith("fstrim") -> {
                         if (!File("/system/bin/fstrim").canExecute()) {
                             Log.w(
@@ -114,6 +125,7 @@ object CommandRunner {
                             return@forEach
                         }
                     }
+
                     cmd.startsWith("appops set --uid all") -> {
                         Log.w(
                             "CommandRunner",
@@ -128,10 +140,11 @@ object CommandRunner {
                     val exit = Runtime.getRuntime()
                         .exec(arrayOf("su", "-c", cmd))
                         .waitFor()
+
                     if (exit != 0) {
                         Log.w(
                             "CommandRunner",
-                            "Non‑zero exit ($exit) for: $cmd"
+                            "Non-zero exit ($exit) for: $cmd"
                         )
                     } else {
                         Log.d(
@@ -149,6 +162,11 @@ object CommandRunner {
             }
 
             if (!disable) {
+                // Restore power profile after uncaging
+                if (prefs.getBoolean(MainActivity.POWER_KEY, true)) {
+                    PowerCageManager.restore(context)
+                }
+
                 // Unblock notifications after restoring modules
                 suppressPkgs.forEach { pkg ->
                     try {
@@ -169,6 +187,7 @@ object CommandRunner {
                         )
                     }
                 }
+
                 // Re-enable Quick Share UI
                 try {
                     Runtime.getRuntime()

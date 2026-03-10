@@ -1,16 +1,18 @@
 package com.example.cager
 
 import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.app.PendingIntent
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.ListenableWorker.Result
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 
 class HousekeeperWorker(
     appContext: Context,
@@ -23,16 +25,16 @@ class HousekeeperWorker(
     }
 
     override suspend fun doWork(): Result {
-        // 1) Clear old notifications
+        createNotificationChannelIfNeeded()
+
         NotificationManagerCompat.from(applicationContext).cancelAll()
 
-        // 2) Optionally clear your app's cache
         applicationContext.cacheDir.listFiles()
             ?.forEach { it.deleteRecursively() }
 
-        // 3) Build the reboot/cache-clear reminder
         val intent = Intent(android.provider.Settings.ACTION_DEVICE_INFO_SETTINGS)
             .apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+
         val pending = PendingIntent.getActivity(
             applicationContext,
             0,
@@ -41,7 +43,6 @@ class HousekeeperWorker(
         )
 
         val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            // system icon—no custom drawable needed
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("System Maintenance")
             .setContentText("It’s been a while—consider rebooting or clearing caches.")
@@ -49,8 +50,8 @@ class HousekeeperWorker(
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
 
-        // 4) Dispatch, guarding Android 13+ POST_NOTIFICATIONS
         val nm = NotificationManagerCompat.from(applicationContext)
+
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
                     applicationContext,
@@ -59,13 +60,26 @@ class HousekeeperWorker(
             ) {
                 try {
                     nm.notify(NOTIF_ID, builder.build())
-                } catch (_: SecurityException) { /* ignore */ }
+                } catch (_: SecurityException) {
+                }
             }
-            // else: permission not granted—skip sending
         } else {
             nm.notify(NOTIF_ID, builder.build())
         }
 
         return Result.success()
+    }
+
+    private fun createNotificationChannelIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Housekeeper Reminder",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
+            applicationContext
+                .getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(channel)
+        }
     }
 }
